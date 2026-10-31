@@ -124,7 +124,7 @@ if uploaded_file is not None:
         f"{uploaded_file.type or 'MIME type not provided'}"
     )
 
-if st.button("Scan file", use_container_width=True, disabled=uploaded_file is None):
+if st.button("Scan file", width="stretch", disabled=uploaded_file is None):
     try:
         file_content = uploaded_file.getvalue()
         assessment = analyze_file(
@@ -140,7 +140,10 @@ if st.button("Scan file", use_container_width=True, disabled=uploaded_file is No
             initialize_history()
             record_scan(
                 scan_type="file",
-                target=f"{assessment.filename} | SHA-256 {assessment.sha256}",
+                target=(
+                    f"{assessment.extension[1:].upper()} file "
+                    f"({assessment.size_bytes:,} bytes)"
+                ),
                 risk_level=assessment.level,
                 summary=_risk_summary(assessment),
             )

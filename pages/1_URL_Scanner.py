@@ -1,92 +1,11 @@
 import html
-import ipaddress
-import re
 import sqlite3
-from dataclasses import dataclass
-from urllib.parse import urlsplit
 
 import streamlit as st
 
 from core.risk_scoring import RiskAssessment, score_url_features
 from database.history_repository import initialize_history, record_scan
-
-
-SUSPICIOUS_KEYWORDS = ("login", "verify", "password", "bank", "secure", "update")
-DOMAIN_LABEL_PATTERN = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\Z")
-
-
-@dataclass(frozen=True)
-class URLFeatures:
-    domain: str
-    https_enabled: bool
-    total_length: int
-    uses_ip_address: bool
-    suspicious_keywords: tuple[str, ...]
-    suspicious_domain_patterns: tuple[str, ...]
-
-
-def _is_valid_domain(hostname: str) -> bool:
-    domain = hostname.rstrip(".")
-    if not domain or len(domain) > 253:
-        return False
-
-    for label in domain.split("."):
-        try:
-            ascii_label = label.encode("idna").decode("ascii").lower()
-        except UnicodeError:
-            return False
-        if len(ascii_label) > 63 or not DOMAIN_LABEL_PATTERN.fullmatch(ascii_label):
-            return False
-    return True
-
-
-def extract_url_features(value: str) -> URLFeatures:
-    """Extract URL features locally; this function never makes a network request."""
-    url = value.strip()
-    if not url:
-        raise ValueError("Enter a URL to analyze.")
-    if any(character.isspace() or ord(character) < 32 for character in url):
-        raise ValueError("The URL cannot contain spaces or control characters.")
-
-    try:
-        parsed_url = urlsplit(url)
-        hostname = parsed_url.hostname
-        scheme = parsed_url.scheme.lower()
-        _ = parsed_url.port
-    except ValueError as error:
-        raise ValueError("Enter a valid URL with a correctly formatted host and port.") from error
-
-    if scheme not in {"http", "https"} or not hostname:
-        raise ValueError("Enter a complete URL beginning with http:// or https://.")
-
-    try:
-        ipaddress.ip_address(hostname)
-        uses_ip_address = True
-    except ValueError:
-        if not _is_valid_domain(hostname):
-            raise ValueError("The URL contains an invalid domain name or IP address.")
-        uses_ip_address = False
-
-    lowered_url = url.lower()
-    keywords = tuple(keyword for keyword in SUSPICIOUS_KEYWORDS if keyword in lowered_url)
-    domain_labels = hostname.lower().rstrip(".").split(".")
-    domain_patterns: list[str] = []
-    if any(label.startswith("xn--") for label in domain_labels):
-        domain_patterns.append("punycode")
-    if len(domain_labels) >= 5:
-        domain_patterns.append("many_labels")
-    if any(label.count("-") >= 1 and sum(character.isdigit() for character in label) >= 3
-           for label in domain_labels):
-        domain_patterns.append("digits_and_hyphens")
-
-    return URLFeatures(
-        domain=hostname.lower(),
-        https_enabled=scheme == "https",
-        total_length=len(url),
-        uses_ip_address=uses_ip_address,
-        suspicious_keywords=keywords,
-        suspicious_domain_patterns=tuple(domain_patterns),
-    )
+from scanners.url_scanner import MAX_URL_LENGTH, URLFeatures, extract_url_features
 
 
 def _render_feature(label: str, value: str, detail: str, tone: str = "purple") -> None:
@@ -122,7 +41,7 @@ def _render_features(features: URLFeatures) -> None:
     with first_row[2]:
         _render_feature("URL LENGTH", f"{features.total_length} characters", "Total entered URL length")
 
-    second_row = st.columns(2, gap="medium")
+    second_row = st.columns(3, gap="medium")
     with second_row[0]:
         _render_feature(
             "IP ADDRESS HOST",
@@ -132,6 +51,13 @@ def _render_features(features: URLFeatures) -> None:
         )
     with second_row[1]:
         _render_feature("SUSPICIOUS KEYWORDS", keywords, keyword_detail, "amber" if features.suspicious_keywords else "green")
+    with second_row[2]:
+        _render_feature(
+            "CREDENTIALS IN URL",
+            "Yes" if features.has_credentials else "No",
+            "Whether the URL contains embedded user information",
+            "amber" if features.has_credentials else "green",
+        )
 
 
 def _render_risk_assessment(assessment: RiskAssessment) -> None:
@@ -218,9 +144,10 @@ with st.form("url_feature_form"):
     url_input = st.text_input(
         "Website URL",
         placeholder="https://example.com/account",
+        max_chars=MAX_URL_LENGTH,
         help="Enter a complete URL beginning with http:// or https://.",
     )
-    submitted = st.form_submit_button("Extract URL features", use_container_width=True)
+    submitted = st.form_submit_button("Extract URL features", width="stretch")
 
 if submitted:
     try:
@@ -234,9 +161,13 @@ if submitted:
         _render_risk_assessment(assessment)
         try:
             initialize_history()
+            history_target = (
+                f"{'https' if extracted_features.https_enabled else 'http'}://"
+                f"{extracted_features.domain}"
+            )
             record_scan(
                 scan_type="url",
-                target=url_input.strip(),
+                target=history_target,
                 risk_level=assessment.level.split()[0].upper(),
                 summary=_build_risk_summary(assessment),
             )

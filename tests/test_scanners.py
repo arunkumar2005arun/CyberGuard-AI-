@@ -23,6 +23,10 @@ class MessageScannerTests(unittest.TestCase):
             with self.subTest(message=message), self.assertRaises(ValueError):
                 analyze_message(message)
 
+    def test_message_length_is_bounded(self) -> None:
+        with self.assertRaisesRegex(ValueError, "100,000 characters"):
+            analyze_message("x" * 100_001)
+
     def test_plain_message_has_no_indicators(self) -> None:
         result = analyze_message("The team meeting is at 10 tomorrow.")
 
@@ -71,6 +75,11 @@ class MessageScannerTests(unittest.TestCase):
         self.assertEqual(result.suspicious_links, ())
         self.assertEqual(result.score, 0)
 
+    def test_subdomain_of_url_shortener_is_flagged(self) -> None:
+        result = analyze_message("Review https://redirect.bit.ly/account")
+
+        self.assertEqual(result.suspicious_links, ("https://redirect.bit.ly/account",))
+
     def test_score_is_capped_at_100(self) -> None:
         message = (
             "Congratulations, you won a prize! Claim your prize immediately. "
@@ -92,6 +101,39 @@ class EmailScannerTests(unittest.TestCase):
         for sender, subject, body in invalid_cases:
             with self.subTest(sender=sender), self.assertRaises(ValueError):
                 analyze_email(sender, subject, body)
+
+    def test_email_fields_have_length_limits(self) -> None:
+        with self.assertRaisesRegex(ValueError, "254 characters"):
+            analyze_email("a" * 250 + "@x.com", "Subject", "Body")
+        with self.assertRaisesRegex(ValueError, "998 characters"):
+            analyze_email("person@example.com", "x" * 999, "Body")
+
+    def test_attachment_findings_contribute_to_email_risk(self) -> None:
+        assessment = analyze_email(
+            "sender@example.com",
+            "Project update",
+            "Please review the attached note.",
+            attachments=(
+                (
+                    "notice.txt",
+                    "text/plain",
+                    b"URGENT: Verify your account and reply with your password. <script>alert(1)</script>",
+                ),
+            ),
+        )
+
+        self.assertEqual(len(assessment.attachments), 1)
+        self.assertEqual(assessment.level, "HIGH")
+        self.assertIn(
+            "Sensitive information request",
+            {indicator.category for indicator in assessment.indicators},
+        )
+
+    def test_email_attachment_count_is_bounded(self) -> None:
+        attachments = tuple((f"{index}.txt", "text/plain", b"note") for index in range(6))
+
+        with self.assertRaisesRegex(ValueError, "no more than 5"):
+            analyze_email("sender@example.com", "Subject", "Body", attachments)
 
     def test_detects_sender_mismatch_and_reuses_message_rules(self) -> None:
         assessment = analyze_email(
@@ -183,7 +225,8 @@ class MessageScannerDatabaseTests(unittest.TestCase):
         scans = get_recent_scans()
         self.assertEqual(len(scans), 1)
         self.assertEqual(scans[0].scan_type, "message")
-        self.assertEqual(scans[0].target, message)
+        self.assertEqual(scans[0].target, f"Message ({len(message):,} characters)")
+        self.assertNotIn(message, scans[0].target)
         self.assertEqual(scans[0].risk_level, "MEDIUM")
         self.assertIn("Prize or lottery claim", scans[0].summary)
 
@@ -238,7 +281,9 @@ class EmailScannerDatabaseTests(unittest.TestCase):
 
         self.assertEqual(len(scans), 1)
         self.assertEqual(scans[0].scan_type, "email")
-        self.assertEqual(scans[0].target, "sender@example.com | Congratulations, you won a prize")
+        self.assertEqual(scans[0].target, "Email message")
+        self.assertNotIn("sender@example.com", scans[0].target)
+        self.assertNotIn("Congratulations", scans[0].target)
         self.assertEqual(scans[0].risk_level, "MEDIUM")
         self.assertIn("Prize or lottery claim", scans[0].summary)
 
@@ -370,6 +415,11 @@ class FileScannerTests(unittest.TestCase):
             with self.subTest(filename=filename), self.assertRaises(ValueError):
                 analyze_file(filename, mime_type, content)
 
+    def test_rejects_invalid_or_overlong_filename(self) -> None:
+        for filename in ("", "x" * 256 + ".txt"):
+            with self.subTest(filename_length=len(filename)), self.assertRaises(ValueError):
+                analyze_file(filename, "text/plain", b"content")
+
     def test_misleading_double_extension_is_flagged(self) -> None:
         assessment = analyze_file("report.exe.txt", "text/plain", b"Please review.")
 
@@ -409,8 +459,9 @@ class FileScannerDatabaseTests(unittest.TestCase):
         scans = get_recent_scans()
         self.assertEqual(len(scans), 1)
         self.assertEqual(scans[0].scan_type, "file")
-        self.assertIn("notes.txt", scans[0].target)
-        self.assertIn(hashlib.sha256(content).hexdigest(), scans[0].target)
+        self.assertEqual(scans[0].target, f"TXT file ({len(content):,} bytes)")
+        self.assertNotIn("notes.txt", scans[0].target)
+        self.assertNotIn(hashlib.sha256(content).hexdigest(), scans[0].target)
         self.assertEqual(scans[0].risk_level, "LOW")
 
         self.app.run()

@@ -121,7 +121,7 @@ def render_history_page() -> None:
     st.dataframe(
         pd.DataFrame(_to_table_rows(filtered_records)),
         hide_index=True,
-        use_container_width=True,
+        width="stretch",
         column_config={
             "Date / Time": st.column_config.TextColumn("Date / Time", width="medium"),
             "Scan Type": st.column_config.TextColumn("Scan Type", width="small"),

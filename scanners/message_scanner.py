@@ -3,8 +3,11 @@ import re
 from dataclasses import dataclass
 from urllib.parse import urlsplit
 
+from core.validation import validate_text
+
 
 _LINK_PATTERN = re.compile(r"(?i)\b(?:https?://|www\.)[^\s<>\"']+")
+MAX_MESSAGE_LENGTH = 100_000
 _CATEGORY_RULES: tuple[tuple[str, int, tuple[str, ...], str], ...] = (
     (
         "Phishing language",
@@ -138,7 +141,10 @@ def _is_suspicious_link(link: str) -> bool:
             return True
         except ValueError:
             pass
-        if hostname in _SHORTENER_DOMAINS:
+        if any(
+            hostname == domain or hostname.endswith(f".{domain}")
+            for domain in _SHORTENER_DOMAINS
+        ):
             return True
         if parsed.scheme.lower() != "https":
             return True
@@ -149,8 +155,12 @@ def _is_suspicious_link(link: str) -> bool:
 
 def analyze_message(message: str) -> MessageAssessment:
     """Analyze message text with local rules only; links are parsed, never opened."""
-    if not isinstance(message, str) or not message.strip():
-        raise ValueError("Enter a text message to analyze.")
+    message = validate_text(
+        message,
+        "Message",
+        MAX_MESSAGE_LENGTH,
+        empty_message="Enter a text message to analyze.",
+    )
 
     links = _extract_links(message)
     suspicious_links = tuple(link for link in links if _is_suspicious_link(link))

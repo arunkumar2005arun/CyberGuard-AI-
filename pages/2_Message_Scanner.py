@@ -4,7 +4,7 @@ import sqlite3
 import streamlit as st
 
 from database.history_repository import initialize_history, record_scan
-from scanners.message_scanner import MessageAssessment, analyze_message
+from scanners.message_scanner import MAX_MESSAGE_LENGTH, MessageAssessment, analyze_message
 
 
 def _render_assessment(assessment: MessageAssessment) -> None:
@@ -106,10 +106,11 @@ with st.form("message_scan_form"):
     message_text = st.text_area(
         "Paste or enter a text message",
         height=190,
+        max_chars=MAX_MESSAGE_LENGTH,
         placeholder="Paste the message you want to check...",
         help="Analysis runs locally using rules. Links in the text are never opened.",
     )
-    submitted = st.form_submit_button("Analyze message", use_container_width=True)
+    submitted = st.form_submit_button("Analyze message", width="stretch")
 
 if submitted:
     try:
@@ -122,7 +123,7 @@ if submitted:
             initialize_history()
             record_scan(
                 scan_type="message",
-                target=message_text.strip()[:500],
+                target=f"Message ({len(message_text.strip()):,} characters)",
                 risk_level=assessment.level,
                 summary=_risk_summary(assessment),
             )

@@ -7,6 +7,7 @@ class URLFeatureSet(Protocol):
     https_enabled: bool
     total_length: int
     uses_ip_address: bool
+    has_credentials: bool
     suspicious_keywords: tuple[str, ...]
     suspicious_domain_patterns: tuple[str, ...]
 
@@ -68,6 +69,22 @@ def score_url_features(features: URLFeatureSet) -> RiskAssessment:
                 explanation="The host is an IP address rather than a named domain.",
                 recommendation="Verify the destination through the organization's official "
                 "website or another trusted channel before proceeding.",
+            )
+        )
+
+    if features.has_credentials:
+        findings.append(
+            RiskFinding(
+                indicator="Credentials embedded in URL",
+                points=25,
+                explanation=(
+                    "The URL contains a username or password before the host, a pattern that can "
+                    "make the actual destination difficult to recognize."
+                ),
+                recommendation=(
+                    "Do not open URLs containing embedded credentials. Remove the user-info and "
+                    "navigate to the verified site directly."
+                ),
             )
         )
 

@@ -1,10 +1,17 @@
 import ipaddress
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 
-from scanners.message_scanner import MessageIndicator, analyze_message
+from core.validation import validate_text
+from scanners.file_scanner import FileAssessment, analyze_file
+from scanners.message_scanner import MAX_MESSAGE_LENGTH, MessageIndicator, analyze_message
 
 
+MAX_EMAIL_ADDRESS_LENGTH = 254
+MAX_EMAIL_SUBJECT_LENGTH = 998
+MAX_EMAIL_ATTACHMENTS = 5
+MAX_EMAIL_ATTACHMENT_TOTAL_SIZE = 20 * 1024 * 1024
 _EMAIL_PATTERN = re.compile(r"^[A-Z0-9.!#$%&'*+/=?^_`{|}~-]+@([A-Z0-9.-]+)$", re.IGNORECASE)
 _BRAND_DOMAINS = {
     "amazon": ("amazon.com",),
@@ -29,6 +36,7 @@ class EmailAssessment:
     indicators: tuple[MessageIndicator, ...]
     links_found: tuple[str, ...]
     suspicious_links: tuple[str, ...]
+    attachments: tuple[FileAssessment, ...]
 
     @property
     def recommendations(self) -> tuple[str, ...]:
@@ -41,7 +49,12 @@ class EmailAssessment:
 
 
 def _parse_sender(sender: str) -> tuple[str, str]:
-    normalized_sender = sender.strip()
+    normalized_sender = validate_text(
+        sender,
+        "Sender address",
+        MAX_EMAIL_ADDRESS_LENGTH,
+        empty_message="Enter a valid sender email address, such as name@example.com.",
+    )
     match = _EMAIL_PATTERN.fullmatch(normalized_sender)
     if not match:
         raise ValueError("Enter a valid sender email address, such as name@example.com.")
@@ -129,18 +142,56 @@ def _sender_indicators(sender: str, domain: str, content: str) -> list[MessageIn
     return findings
 
 
-def analyze_email(sender: str, subject: str, body: str) -> EmailAssessment:
+def analyze_email(
+    sender: str,
+    subject: str,
+    body: str,
+    attachments: Sequence[tuple[str, str, bytes]] = (),
+) -> EmailAssessment:
     """Analyze sender and email text locally; discovered links are never visited."""
     normalized_sender, sender_domain = _parse_sender(sender)
-    normalized_subject = subject.strip()
-    normalized_body = body.strip()
+    normalized_subject = validate_text(
+        subject,
+        "Email subject",
+        MAX_EMAIL_SUBJECT_LENGTH,
+        allow_empty=True,
+    )
+    normalized_body = validate_text(
+        body,
+        "Email body",
+        MAX_MESSAGE_LENGTH,
+        allow_empty=True,
+    )
     if not normalized_subject and not normalized_body:
         raise ValueError("Enter an email subject or body to analyze.")
 
     content = "\n".join(part for part in (normalized_subject, normalized_body) if part)
     content_assessment = analyze_message(content)
     sender_findings = _sender_indicators(normalized_sender, sender_domain, content)
-    indicators = tuple(sender_findings) + content_assessment.indicators
+
+    if len(attachments) > MAX_EMAIL_ATTACHMENTS:
+        raise ValueError(f"Analyze no more than {MAX_EMAIL_ATTACHMENTS} email attachments at once.")
+
+    attachment_assessments: list[FileAssessment] = []
+    total_attachment_size = 0
+    for attachment in attachments:
+        if not isinstance(attachment, tuple) or len(attachment) != 3:
+            raise ValueError("Each attachment must include a filename, MIME type, and bytes.")
+        filename, mime_type, data = attachment
+        if not isinstance(data, bytes):
+            raise ValueError("Email attachment content must be bytes.")
+        total_attachment_size += len(data)
+        if total_attachment_size > MAX_EMAIL_ATTACHMENT_TOTAL_SIZE:
+            maximum_mb = MAX_EMAIL_ATTACHMENT_TOTAL_SIZE // (1024 * 1024)
+            raise ValueError(f"Combined email attachments cannot exceed {maximum_mb} MB.")
+        attachment_assessments.append(analyze_file(filename, mime_type, data))
+
+    attachment_findings = tuple(
+        indicator
+        for assessment in attachment_assessments
+        for indicator in assessment.indicators
+    )
+    indicators = tuple(sender_findings) + content_assessment.indicators + attachment_findings
     score = min(sum(indicator.points for indicator in indicators), 100)
     if score <= 30:
         level = "LOW"
@@ -157,4 +208,5 @@ def analyze_email(sender: str, subject: str, body: str) -> EmailAssessment:
         indicators=indicators,
         links_found=content_assessment.links_found,
         suspicious_links=content_assessment.suspicious_links,
+        attachments=tuple(attachment_assessments),
     )

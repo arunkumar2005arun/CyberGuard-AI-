@@ -10,6 +10,7 @@ class URLFeatures:
     https_enabled: bool = True
     total_length: int = 24
     uses_ip_address: bool = False
+    has_credentials: bool = False
     suspicious_keywords: tuple[str, ...] = ()
     suspicious_domain_patterns: tuple[str, ...] = ()
 
@@ -44,6 +45,7 @@ class URLRiskScoringTests(unittest.TestCase):
             https_enabled=False,
             total_length=250,
             uses_ip_address=True,
+            has_credentials=True,
             suspicious_keywords=("login", "verify", "bank", "secure"),
             suspicious_domain_patterns=("punycode", "many_labels", "digits_and_hyphens"),
         )
@@ -57,6 +59,7 @@ class URLRiskScoringTests(unittest.TestCase):
             {
                 "HTTP instead of HTTPS",
                 "IP address used as host",
+                "Credentials embedded in URL",
                 "Suspicious URL keywords",
                 "Unusually long URL",
                 "Punycode domain label",

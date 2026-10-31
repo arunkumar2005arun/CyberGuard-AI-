@@ -53,7 +53,7 @@ def render_dashboard() -> None:
             unsafe_allow_html=True,
         )
     with right:
-        if st.button("↻  Refresh", use_container_width=True):
+        if st.button("↻  Refresh", width="stretch"):
             st.rerun()
 
     metric_columns = st.columns(4, gap="medium")

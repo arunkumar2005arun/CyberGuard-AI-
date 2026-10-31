@@ -5,10 +5,36 @@ from unittest.mock import patch
 
 import database.connection as database_connection
 from database.history_repository import get_recent_scans, initialize_history
+from scanners.url_scanner import extract_url_features
 from streamlit.testing.v1 import AppTest
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+
+class URLFeatureExtractionTests(unittest.TestCase):
+    def test_extracts_host_scheme_and_risk_features(self) -> None:
+        features = extract_url_features("http://192.0.2.10/account/verify")
+
+        self.assertEqual(features.domain, "192.0.2.10")
+        self.assertFalse(features.https_enabled)
+        self.assertTrue(features.uses_ip_address)
+        self.assertFalse(features.has_credentials)
+        self.assertEqual(features.suspicious_keywords, ("verify",))
+
+    def test_detects_user_info_without_retaining_it_in_features(self) -> None:
+        features = extract_url_features(
+            "https://user:secret@example.com/private?token=secret"
+        )
+
+        self.assertEqual(features.domain, "example.com")
+        self.assertTrue(features.has_credentials)
+        self.assertNotIn("secret", features.domain)
+
+    def test_rejects_malformed_and_unsupported_urls(self) -> None:
+        for value in ("", "not a URL", "ftp://example.com", "https://example.com:bad"):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                extract_url_features(value)
 
 
 class URLScanDatabaseIntegrationTests(unittest.TestCase):
@@ -44,12 +70,19 @@ class URLScanDatabaseIntegrationTests(unittest.TestCase):
         scans = get_recent_scans()
         self.assertEqual(len(scans), 1)
         self.assertEqual(scans[0].scan_type, "url")
-        self.assertEqual(scans[0].target, url)
+        self.assertEqual(scans[0].target, "https://example.com")
         self.assertEqual(scans[0].risk_level, "LOW")
         self.assertIn("Low Risk (0/100)", scans[0].summary)
 
         self.app.run()
         self.assertEqual(len(get_recent_scans()), 1)
+
+    def test_history_does_not_store_url_path_or_query_secrets(self) -> None:
+        self._submit_url("https://user:secret@example.com/private?token=secret")
+
+        scans = get_recent_scans()
+        self.assertEqual(scans[0].target, "https://example.com")
+        self.assertNotIn("secret", scans[0].target)
 
     def test_invalid_url_is_not_saved(self) -> None:
         self._submit_url("not a valid URL")

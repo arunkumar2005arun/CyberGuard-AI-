@@ -11,6 +11,7 @@ from scanners.message_scanner import MessageIndicator, analyze_message
 
 
 MAX_FILE_SIZE = 10 * 1024 * 1024
+MAX_FILE_NAME_LENGTH = 255
 MAX_ARCHIVE_ENTRIES = 1000
 MAX_ARCHIVE_EXPANDED_SIZE = 20 * 1024 * 1024
 MAX_TEXT_SCAN_SIZE = 2 * 1024 * 1024
@@ -30,6 +31,7 @@ _SUPPORTED_MIME_TYPES = {
     ".tiff": frozenset({"image/tiff"}),
     ".webp": frozenset({"image/webp"}),
 }
+SUPPORTED_FILE_TYPES = tuple(extension.lstrip(".") for extension in _SUPPORTED_MIME_TYPES)
 _SUSPICIOUS_TEXT_PATTERNS: tuple[tuple[str, int, tuple[str, ...], str], ...] = (
     (
         "Embedded script or active content",
@@ -199,6 +201,10 @@ def _add_text_indicators(text: str, findings: list[MessageIndicator]) -> None:
 
 def analyze_file(filename: str, mime_type: str, data: bytes) -> FileAssessment:
     """Perform bounded local static checks; never extracts, executes, or uploads a file."""
+    if not isinstance(filename, str) or not filename.strip():
+        raise ValueError("The uploaded file must have a valid filename.")
+    if len(filename) > MAX_FILE_NAME_LENGTH:
+        raise ValueError("The uploaded filename exceeds the 255-character maximum.")
     safe_name = PurePath(filename.replace("\\", "/")).name
     extension = PurePath(safe_name).suffix.lower()
     if extension not in _SUPPORTED_MIME_TYPES:
